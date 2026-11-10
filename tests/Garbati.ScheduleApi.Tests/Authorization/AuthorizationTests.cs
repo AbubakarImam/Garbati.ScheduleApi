@@ -13,7 +13,7 @@ namespace Garbati.ScheduleApi.Tests.Authorization;
 public class AuthorizationTests(ApiFixture fixture)
 {
     private static string CreateBody() => """
-        {"name":"auth-test-create","customerId":"CUS-AUTHTEST","fromAccountType":"Savings","fromAccountId":"1000000001",
+        {"idempotencyKey":"auth-test-create","name":"auth-test-create","customerId":"CUS-AUTHTEST","fromAccountType":"Savings","fromAccountId":"1000000001",
          "toAccountType":"Savings","toAccountId":"1000000002","transferType":"AccountTransfer","instructionType":"Fixed",
          "priority":"Medium","amount":100,"currency":"NGN","validFrom":"2026-01-01","recurrenceType":"Periodic",
          "recurrenceFrequency":"Months","recurrenceInterval":1,"recurrenceOnDay":1,"allowPartialTransfer":false}

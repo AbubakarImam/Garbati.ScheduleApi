@@ -17,6 +17,12 @@ public class ScheduleDbContext(DbContextOptions<ScheduleDbContext> options) : Db
             entity.HasIndex(s => s.Name).IsUnique();
             entity.HasIndex(s => s.CustomerId);
 
+            // Idempotency for creation, scoped per calling client - the exact same shape as LedgerApi's
+            // ix_accounts_initiated_by_idempotency_key and Garbati.IdentityApi's
+            // ix_customers_initiated_by_idempotency_key (confirmed against both repos' real
+            // AccountService/CustomerService before copying the shape, not guessed).
+            entity.HasIndex(s => new { s.InitiatedBy, s.IdempotencyKey }).IsUnique().AreNullsDistinct(false);
+
             entity.Property(s => s.FromAccountType).HasConversion<string>();
             entity.Property(s => s.ToAccountType).HasConversion<string>();
             entity.Property(s => s.TransferType).HasConversion<string>();

@@ -14,6 +14,11 @@ public class CreateStandingInstructionRequestValidator
     {
         var errors = new List<string>();
 
+        if (IdempotencyKeyRule.Validate(request.IdempotencyKey) is { } idempotencyError)
+        {
+            errors.Add(idempotencyError);
+        }
+
         if (string.IsNullOrWhiteSpace(request.Name))
         {
             errors.Add("Name is required.");

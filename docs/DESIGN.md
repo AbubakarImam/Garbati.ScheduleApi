@@ -68,6 +68,9 @@ deterministic idempotency key, and records a `StandingInstructionRun` row with t
 | `Status` | enum: `Active`, `Disabled`, `Deleted` | soft lifecycle, matching Fineract's own real three-value enum exactly (T-069 Finding 4) |
 | `LastRunDate` | date, nullable | the most recent date a run was attempted (success or failure — this is "last attempted," not "last succeeded") |
 | `CreatedAt`, `UpdatedAt` | timestamp | |
+| `IdempotencyKey` | string, nullable | **added by T-071, a gap in this table, not a deliberate omission** — every other create endpoint on this platform (`LedgerApi`'s `POST /api/accounts`, `Garbati.IdentityApi`'s `POST /v1/customers`) takes a client-supplied idempotency key, scoped per calling client, so a network retry transparently replays the original resource instead of creating a duplicate or erroring. This table originally had no such field at all; T-071 found this while building against the real sibling patterns and fixed it rather than silently matching an incomplete table (see Appendix A) |
+| `InitiatedBy` | string, nullable | the calling client id (added alongside `IdempotencyKey`) — together they form the same unique `(InitiatedBy, IdempotencyKey)` index every sibling service's equivalent entity uses |
+| `RequestHash` | string, nullable | fingerprint of the fields that define what gets created, so a reused key with a different body is detected and refused (409) rather than silently replaying the wrong instruction — same convention as `LedgerApi`'s `AccountService.HashRequest`/`Garbati.IdentityApi`'s `CustomerService.HashRequest` |
 
 ### 2.2 `StandingInstructionRun`
 
@@ -223,6 +226,7 @@ pattern every sibling service uses.
 | 5 | Scheduling mechanism | A new job-scheduling dependency (Quartz.NET, Hangfire) vs. a plain `BackgroundService` | **Plain `BackgroundService`**, polling hourly | No new dependency; matches this project's "simplest sufficient tool" discipline; nothing about v1's scale needs a distributed job scheduler |
 | 6 | Run-history status values | Mirror Fineract's own (unconfirmed) literal strings vs. define GARBATI's own closed set | **GARBATI's own closed enum**: `Success`/`Partial`/`Failed`/`Skipped` | T-069 could not confirm Fineract's own exact literal strings from source; guessing at an unverified external format is worse than a clean, self-documented set, plus `Skipped` (a GARBATI addition) has no Fineract equivalent needed |
 | 7 | Month-day recurrence (day 29-31) | Naive date-truncating arithmetic vs. clamp to the target month's real length | **Clamp** | T-069 found Fineract shipped and later fixed exactly this bug in production (FINERACT-2914) — starting from the fixed behavior instead of rediscovering the bug |
+| 8 | Create-time idempotency | Leave `POST /v1/standing-instructions` without a client-supplied idempotency key (this table's own original state) vs. add one, mirroring every other create endpoint on the platform | **Added** `IdempotencyKey`/`InitiatedBy`/`RequestHash`, scoped per calling client, matching `LedgerApi`'s `POST /api/accounts` and `Garbati.IdentityApi`'s `POST /v1/customers` exactly | **Found during T-071's build, not a reopened decision** — this table simply never had the field; every other platform create endpoint already follows this exact convention (client-supplied key, request-hash fingerprint, insert-then-catch-the-unique-constraint so a network retry replays rather than duplicates or errors), and `StandingInstruction` creation has no principled reason to be the one exception. See Appendix A for what T-071 actually checked in `LedgerApi`'s/`Garbati.IdentityApi`'s real source before copying the shape |
 
 ## 7. Open questions / explicitly deferred
 
@@ -239,12 +243,30 @@ Built everything in this document's v1 scope in one task, on `feature/T-071-foun
 `Clients/` split, API-key auth). The task file left real judgment calls, recorded here plus the smaller
 decisions made along the way:
 
-1. **`RecurrenceOnMonth`/day-of-week numbering** — see Section 3.4's own inline note, added by this
+1. **`POST /v1/standing-instructions` had no idempotency key at all until a QA review of this same PR
+   caught it (decision #8) — a real gap in this document's own Section 2.1 table, not a silent
+   deviation from an existing decision.** The first pass of this build read Section 2.1 literally (no
+   `IdempotencyKey` field was listed) and documented that reading explicitly in code and in this
+   document's own text — but every other create endpoint on this platform (checked directly against
+   `LedgerApi.Services.Implementations.AccountService.CreateAccountAsync` and `Garbati.IdentityApi.
+   Services.Implementations.CustomerService.CreateCustomerAsync`, not assumed) follows an established,
+   non-negotiable convention: a client-supplied key, scoped per calling client (`InitiatedBy`), a
+   `RequestHash` fingerprint of the fields that define the created resource, and an insert-then-catch-
+   the-unique-constraint flow so a network retry replays the original resource (same status code the
+   sibling returns on replay - 200, not 201) instead of creating a duplicate or erroring. Fixed by adding
+   `IdempotencyKey`/`InitiatedBy`/`RequestHash` to the entity (Section 2.1), a new migration, the same
+   request-hash/retry-loop shape in `StandingInstructionService.CreateAsync`, and two regression tests
+   (`Controllers/CreateStandingInstructionTests`: same-key-same-body replays with no second row; same-
+   key-different-body returns 409). One real wrinkle this entity has that neither sibling's does: a
+   second, independent uniqueness rule (`Name`) that a legitimate replay would otherwise always collide
+   with if the idempotency match weren't checked FIRST, before the `Name` pre-check - documented in
+   `StandingInstructionService.CreateAsync`'s own comment.
+2. **`RecurrenceOnMonth`/day-of-week numbering** — see Section 3.4's own inline note, added by this
    build: the task file's summary of the due-date check mentions a `RecurrenceOnMonth` field this
    document's own Section 2.1 table does not define: not invented. `RecurrenceOnDay` as a day of week
    (`Weeks`) uses ISO 8601 numbering (`1` = Monday … `7` = Sunday), undocumented in Section 2.1 and
    genuinely open until this build.
-2. **`PUT`'s exact field set.** Section 4's own row says "amount, schedule, priority,
+3. **`PUT`'s exact field set.** Section 4's own row says "amount, schedule, priority,
    `AllowPartialTransfer`" — read as `Amount`, `ValidFrom`/`ValidTill`/`RecurrenceType`/
    `RecurrenceFrequency`/`RecurrenceInterval`/`RecurrenceOnDay` ("schedule"), `Priority`,
    `AllowPartialTransfer`. `Name`/`CustomerId`/the four account fields/`TransferType`/`InstructionType`
@@ -252,7 +274,7 @@ decisions made along the way:
    is a cancel-and-recreate workflow in this design, not an edit. `RecurrenceType` is re-validated against
    the same "only `Periodic`" rule `POST` enforces, since `PUT` is otherwise a way to smuggle an
    instruction into `AsPerDues` after creation.
-3. **Idempotency key uses the internal numeric `Id`, confirmed as intentional, not an inconsistency.**
+4. **Idempotency key uses the internal numeric `Id`, confirmed as intentional, not an inconsistency.**
    Section 2.2 types `StandingInstructionRun.StandingInstructionId` as `long` (the FK), and Section 3.1's
    `sched:{standingInstructionId}:{scheduledDate:yyyy-MM-dd}` uses that same field name — read literally,
    this is the *internal* PK, not the public `StandingInstructionId` string. Checked against `LedgerApi`'s
@@ -261,20 +283,20 @@ decisions made along the way:
    same shape. An internally-generated, caller-unreachable dedup key already has established precedent as
    the one exception to this platform's "never expose the internal Id" discipline — implemented literally,
    not changed.
-4. **No `AuditLog` entity.** `ARCHITECTURE.md` Section 5 names an audit convention every service follows,
+5. **No `AuditLog` entity.** `ARCHITECTURE.md` Section 5 names an audit convention every service follows,
    but this document's own Section 2 defines exactly two entities, and the task file's entity list is the
    same two — `StandingInstructionRun` already serves as the durable "what happened" record this service's
    own job is built around. Not added; flagged here rather than silently matching `OrchestratorApi`'s
    separate `AuditLogs` table it was not asked to build.
-5. **`StandingInstructionId` prefix: `SI-`.** No existing convention to extend (this is the first entity
+6. **`StandingInstructionId` prefix: `SI-`.** No existing convention to extend (this is the first entity
    needing one in this service); chosen for the obvious reason (Standing Instruction), same generation
    scheme as `OrchestratorApi`'s `OperationIdGenerator`.
-6. **Duplicate `Name` → 409, run history ordering → most-recent-first.** Neither is specified by this
+7. **Duplicate `Name` → 409, run history ordering → most-recent-first.** Neither is specified by this
    document. 409 matches this platform's existing "same key/identity, different content" conflict
    convention; most-recent-first matches how a statement/run history reads in every other context on this
    platform that has one, as opposed to `Garbati.IdentityApi`'s oldest-first approvals *queue* (a queue is
    worked through in order; a run history is read, not worked).
-7. **Testing against mocked HTTP clients, not real locally-run `OrchestratorApi`/`LedgerApi` instances** —
+8. **Testing against mocked HTTP clients, not real locally-run `OrchestratorApi`/`LedgerApi` instances** —
    the same judgment call `OrchestratorApi`'s own Appendix A made for its first build, for the same reason
    (standing up two more full services inside this task's CI run is a lot of added infrastructure for a
    first build). **What this does not prove:** that `OrchestratorApi`'s and `LedgerApi`'s *currently

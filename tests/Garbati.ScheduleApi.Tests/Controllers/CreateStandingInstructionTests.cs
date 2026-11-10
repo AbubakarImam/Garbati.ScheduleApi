@@ -2,6 +2,7 @@ using Garbati.ScheduleApi.Authorization;
 using System.Net;
 using System.Net.Http.Json;
 using Garbati.ScheduleApi.Tests.Fixtures;
+using Microsoft.EntityFrameworkCore;
 
 namespace Garbati.ScheduleApi.Tests.Controllers;
 
@@ -25,6 +26,50 @@ public class CreateStandingInstructionTests(ApiFixture fixture)
         Assert.False(string.IsNullOrWhiteSpace(created.GetProperty("standingInstructionId").GetString()));
         Assert.Equal("Active", created.GetProperty("status").GetString());
         Assert.Equal(500, created.GetProperty("amount").GetDecimal());
+    }
+
+    // --- idempotency (docs/DESIGN.md Appendix A - a gap in the original design table, found and fixed
+    // during the build; mirrors LedgerApi's POST /api/accounts / Garbati.IdentityApi's POST /v1/customers) ---
+
+    [Fact]
+    public async Task Create_RetriedWithTheSameKeyAndBody_ReplaysTheOriginalInstruction_CreatesNoSecondRow()
+    {
+        using var client = Client();
+        var key = $"idem-replay-{Guid.NewGuid():N}";
+        var request = TestRequests.CreateRequest(idempotencyKey: key);
+
+        var first = await TestRequests.CreateAsync(client, request);
+        var second = await TestRequests.CreateAsync(client, request);
+
+        Assert.Equal(first.GetProperty("standingInstructionId").GetString(), second.GetProperty("standingInstructionId").GetString());
+
+        await using var dbContext = fixture.CreateContext();
+        var matchingRows = await dbContext.StandingInstructions.CountAsync(s => s.IdempotencyKey == key);
+        Assert.Equal(1, matchingRows); // exactly one row - the retry did not create a second instruction.
+    }
+
+    [Fact]
+    public async Task Create_RetriedWithTheSameKeyButADifferentBody_Returns409()
+    {
+        using var client = Client();
+        var key = $"idem-conflict-{Guid.NewGuid():N}";
+
+        await TestRequests.CreateAsync(client, TestRequests.CreateRequest(idempotencyKey: key, amount: 500m));
+
+        using var response = await client.PostAsJsonAsync(
+            "/v1/standing-instructions", TestRequests.CreateRequest(idempotencyKey: key, amount: 999m), TestRequests.JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_WithoutAnIdempotencyKey_Returns400()
+    {
+        using var client = Client();
+        using var response = await client.PostAsJsonAsync(
+            "/v1/standing-instructions", TestRequests.CreateRequest(idempotencyKey: ""), TestRequests.JsonOptions);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     // --- enum-shaped request fields: each posted as the exact string a real caller sends -------------

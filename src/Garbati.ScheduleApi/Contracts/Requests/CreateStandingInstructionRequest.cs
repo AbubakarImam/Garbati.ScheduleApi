@@ -1,12 +1,17 @@
 namespace Garbati.ScheduleApi.Contracts.Requests;
 
 // docs/DESIGN.md Section 2.1/4. Every enum-shaped field is a plain string (Validation/EnumParser) - the
-// LedgerApi PR #31 lesson this task was explicitly told not to repeat. No IdempotencyKey field: unlike
-// every other create-style endpoint on this platform, docs/DESIGN.md's own StandingInstruction entity
-// table (Section 2.1) has no such field - creating a standing instruction is not itself an idempotent
-// operation in this design; only each individual scheduled RUN is (via the sched:{id}:{date} key,
-// Section 3.1), which this service generates itself and a caller never supplies.
+// LedgerApi PR #31 lesson this task was explicitly told not to repeat.
+//
+// IdempotencyKey: a real gap in docs/DESIGN.md Section 2.1's own original field table, found and fixed
+// during this build (docs/DESIGN.md Appendix A) - every other create endpoint on this platform
+// (LedgerApi's POST /api/accounts, Garbati.IdentityApi's POST /v1/customers) follows this exact
+// convention: a client-supplied key, scoped per calling client, so a network retry transparently
+// replays the original resource (StandingInstructionService.CreateAsync) instead of creating a
+// duplicate or erroring. The original "no IdempotencyKey field" reading of the design table was wrong,
+// not a deliberate design choice this table ever actually made.
 public record CreateStandingInstructionRequest(
+    string IdempotencyKey,
     string Name,
     string CustomerId,
     string FromAccountType,
@@ -25,4 +30,4 @@ public record CreateStandingInstructionRequest(
     string RecurrenceFrequency,
     int RecurrenceInterval,
     int? RecurrenceOnDay,
-    bool AllowPartialTransfer);
+    bool AllowPartialTransfer) : IIdempotentRequest;

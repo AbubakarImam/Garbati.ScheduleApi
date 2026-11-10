@@ -113,7 +113,7 @@ All under `/v1/standing-instructions` (`docs/DESIGN.md` Section 4):
 
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/` | Create. `422` for any not-yet-supported combination (`Loan` account type, non-`AccountTransfer`, `Dues`, `AsPerDues`) with a clear reason; `409` for a duplicate `Name` |
+| `POST` | `/` | Create. Requires a client-supplied `idempotencyKey` (see [Idempotency](#idempotency) below). `422` for any not-yet-supported combination (`Loan` account type, non-`AccountTransfer`, `Dues`, `AsPerDues`) with a clear reason; `409` for a duplicate `Name` or a reused `idempotencyKey` with a different body |
 | `GET` | `/{id}` | Current state (any status, including `Deleted`) |
 | `GET` | `?customerId=` | Paged list for one customer |
 | `PUT` | `/{id}` | Real in-place edit: amount, schedule, priority, `AllowPartialTransfer`. `422` on a `Deleted` instruction |
@@ -130,9 +130,21 @@ All under `/v1/standing-instructions` (`docs/DESIGN.md` Section 4):
 | `401` | Missing or unknown API key |
 | `403` | The API key lacks the endpoint's scope |
 | `404` | Standing instruction not found |
-| `409` | Duplicate `Name` |
+| `409` | Duplicate `Name`, or `idempotencyKey` reused with a different request body |
 | `422` | A not-yet-supported financing combination at creation/edit, or any write attempt against a `Deleted` instruction |
 | `500` | Unexpected error |
+
+## Idempotency
+
+`POST /v1/standing-instructions` requires a client-supplied `idempotencyKey` (1-128 characters: letters,
+digits, `-`, `_`, `.` or `:`, and must not start with the reserved `sched:` prefix - that namespace is
+reserved for this service's own derived run keys, `sched:{id}:{date}`), scoped to the calling API
+client - the same scheme `LedgerApi`'s `POST /api/accounts` and `Garbati.IdentityApi`'s
+`POST /v1/customers` use. A retry with the same key and the same other fields returns the original
+instruction (`200`), not a second one; the same key with different fields gets `409`.
+
+This was a real gap in `docs/DESIGN.md`'s original entity table, found during this service's first
+build and fixed before merge - see `docs/DESIGN.md` Section 6 decision #8 and Appendix A.
 
 ## Authentication
 

@@ -47,6 +47,7 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
     {
         StandingInstructionNotFoundException => (StatusCodes.Status404NotFound, "Standing instruction not found."),
         DuplicateStandingInstructionNameException => (StatusCodes.Status409Conflict, "Duplicate standing instruction name."),
+        DuplicateIdempotencyKeyException => (StatusCodes.Status409Conflict, "Duplicate idempotency key."),
         StandingInstructionDeletedException => (StatusCodes.Status422UnprocessableEntity, "Standing instruction deleted."),
         NoFinancingModuleException => (StatusCodes.Status422UnprocessableEntity, "Requires a financing module that does not exist yet."),
         _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred.")

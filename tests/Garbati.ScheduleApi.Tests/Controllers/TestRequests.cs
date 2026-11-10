@@ -11,19 +11,21 @@ internal static class TestRequests
     public static JsonSerializerOptions JsonOptions { get; } = new(JsonSerializerDefaults.Web);
 
     public static object CreateRequest(
-        string? name = null, string? customerId = null,
+        string? idempotencyKey = null, string? name = null, string? customerId = null,
+        string? fromAccountId = null, string? toAccountId = null,
         string fromAccountType = "Savings", string toAccountType = "Savings",
         string transferType = "AccountTransfer", string instructionType = "Fixed",
         string priority = "Medium", string recurrenceType = "Periodic", string recurrenceFrequency = "Months",
         decimal amount = 500m, int recurrenceInterval = 1, int? recurrenceOnDay = 1,
         bool allowPartialTransfer = false) => new
     {
+        idempotencyKey = idempotencyKey ?? $"idem-{Guid.NewGuid():N}",
         name = name ?? $"test-{Guid.NewGuid():N}",
         customerId = customerId ?? $"CUS-{Guid.NewGuid():N}",
         fromAccountType,
-        fromAccountId = $"ACC-{Guid.NewGuid():N}"[..12],
+        fromAccountId = fromAccountId ?? $"ACC-{Guid.NewGuid():N}"[..12],
         toAccountType,
-        toAccountId = $"ACC-{Guid.NewGuid():N}"[..12],
+        toAccountId = toAccountId ?? $"ACC-{Guid.NewGuid():N}"[..12],
         transferType,
         instructionType,
         priority,

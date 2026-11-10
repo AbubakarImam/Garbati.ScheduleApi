@@ -32,7 +32,7 @@ try
         .ReadFrom.Services(services)
         .Enrich.FromLogContext());
 
-    builder.Services.AddControllers();
+    builder.Services.AddControllers(options => options.Filters.Add<IdempotencyKeyLoggingFilter>());
     // Lowercase route URLs in generated links and the Swagger docs, same as every sibling service.
     builder.Services.AddRouting(options => options.LowercaseUrls = true);
     builder.Services.AddEndpointsApiExplorer();
@@ -87,6 +87,7 @@ try
         .UseSnakeCaseNamingConvention());
 
     builder.Services.AddHttpContextAccessor();
+    builder.Services.AddScoped<ICurrentClient, HttpCurrentClient>();
 
     // Health checks for the hosting platform: "ready" includes the database, "live" checks only the process.
     builder.Services.AddHealthChecks()

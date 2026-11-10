@@ -63,6 +63,14 @@ namespace Garbati.ScheduleApi.Migrations
                         .HasColumnType("text")
                         .HasColumnName("from_account_type");
 
+                    b.Property<string>("IdempotencyKey")
+                        .HasColumnType("text")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("InitiatedBy")
+                        .HasColumnType("text")
+                        .HasColumnName("initiated_by");
+
                     b.Property<string>("InstructionType")
                         .IsRequired()
                         .HasColumnType("text")
@@ -103,6 +111,10 @@ namespace Garbati.ScheduleApi.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("recurrence_type");
+
+                    b.Property<string>("RequestHash")
+                        .HasColumnType("text")
+                        .HasColumnName("request_hash");
 
                     b.Property<string>("StandingInstructionId")
                         .IsRequired()
@@ -154,6 +166,12 @@ namespace Garbati.ScheduleApi.Migrations
                     b.HasIndex("StandingInstructionId")
                         .IsUnique()
                         .HasDatabaseName("ix_standing_instructions_standing_instruction_id");
+
+                    b.HasIndex("InitiatedBy", "IdempotencyKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_standing_instructions_initiated_by_idempotency_key");
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("InitiatedBy", "IdempotencyKey"), false);
 
                     b.ToTable("standing_instructions", null, t =>
                         {

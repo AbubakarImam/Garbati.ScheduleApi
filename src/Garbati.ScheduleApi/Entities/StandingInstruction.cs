@@ -46,4 +46,16 @@ public class StandingInstruction
 
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+
+    // Idempotency for creation - a gap in docs/DESIGN.md Section 2.1's own original field table, found
+    // during the build and fixed here (docs/DESIGN.md Appendix A): every other create endpoint on this
+    // platform (LedgerApi's AccountService, Garbati.IdentityApi's CustomerService) follows this exact
+    // shape - a client-supplied IdempotencyKey, scoped per calling client (InitiatedBy), plus a
+    // RequestHash fingerprinting the fields that define what gets created, so a network retry with the
+    // same key transparently replays the original resource instead of creating a duplicate or erroring.
+    // All three nullable only because EF Core requires every mapped property to have a settable default -
+    // every row created through StandingInstructionsController.Create always sets all three.
+    public string? IdempotencyKey { get; set; }
+    public string? InitiatedBy { get; set; }
+    public string? RequestHash { get; set; }
 }

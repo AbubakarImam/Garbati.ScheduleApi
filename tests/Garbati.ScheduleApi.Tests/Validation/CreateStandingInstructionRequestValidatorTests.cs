@@ -8,7 +8,7 @@ public class CreateStandingInstructionRequestValidatorTests
     private readonly CreateStandingInstructionRequestValidator _validator = new();
 
     private static CreateStandingInstructionRequest Valid() => new(
-        "a-valid-name", "CUS-1", "Savings", "ACC-FROM", "Savings", "ACC-TO",
+        $"idem-{Guid.NewGuid():N}", "a-valid-name", "CUS-1", "Savings", "ACC-FROM", "Savings", "ACC-TO",
         "AccountTransfer", "Fixed", "Medium", 100m, "NGN", null,
         new DateOnly(2026, 1, 1), null, "Periodic", "Months", 1, 1, false);
 
@@ -162,6 +162,26 @@ public class CreateStandingInstructionRequestValidatorTests
         var errors = _validator.Validate(request);
 
         Assert.Contains(errors, e => e.Contains("RecurrenceOnDay"));
+    }
+
+    [Fact]
+    public void Validate_WhenIdempotencyKeyIsMissing_ReturnsAnError()
+    {
+        var request = Valid() with { IdempotencyKey = "" };
+
+        var errors = _validator.Validate(request);
+
+        Assert.Contains(errors, e => e.Contains("IdempotencyKey"));
+    }
+
+    [Fact]
+    public void Validate_WhenIdempotencyKeyUsesTheReservedSchedPrefix_ReturnsAnError()
+    {
+        var request = Valid() with { IdempotencyKey = "sched:1:2026-01-01" };
+
+        var errors = _validator.Validate(request);
+
+        Assert.Contains(errors, e => e.Contains("IdempotencyKey"));
     }
 
     [Fact]

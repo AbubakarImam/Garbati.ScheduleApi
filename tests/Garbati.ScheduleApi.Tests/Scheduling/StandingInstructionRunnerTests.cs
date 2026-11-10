@@ -52,6 +52,13 @@ public class StandingInstructionRunnerTests(PostgresFixture fixture) : IAsyncLif
         LastRunDate = null,
         CreatedAt = DateTimeOffset.UtcNow,
         UpdatedAt = DateTimeOffset.UtcNow,
+        // A unique key/caller pair per instruction - these rows bypass CreateAsync entirely (direct
+        // DbContext insertion), but the unique index on (InitiatedBy, IdempotencyKey) applies regardless;
+        // leaving both null for every row would collide under AreNullsDistinct(false) once more than one
+        // such instruction exists in the same test.
+        IdempotencyKey = $"test-idem-{Guid.NewGuid():N}",
+        InitiatedBy = "test-caller",
+        RequestHash = "test-hash",
     };
 
     [Fact]
