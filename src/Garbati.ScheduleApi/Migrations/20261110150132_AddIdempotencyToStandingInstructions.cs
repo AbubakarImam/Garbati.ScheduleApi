@@ -14,19 +14,22 @@ namespace Garbati.ScheduleApi.Migrations
                 name: "idempotency_key",
                 table: "standing_instructions",
                 type: "text",
-                nullable: true);
+                nullable: false,
+                defaultValue: "");
 
             migrationBuilder.AddColumn<string>(
                 name: "initiated_by",
                 table: "standing_instructions",
                 type: "text",
-                nullable: true);
+                nullable: false,
+                defaultValue: "");
 
             migrationBuilder.AddColumn<string>(
                 name: "request_hash",
                 table: "standing_instructions",
                 type: "text",
-                nullable: true);
+                nullable: false,
+                defaultValue: "");
 
             migrationBuilder.CreateIndex(
                 name: "ix_standing_instructions_initiated_by_idempotency_key",

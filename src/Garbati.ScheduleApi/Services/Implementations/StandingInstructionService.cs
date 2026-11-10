@@ -79,7 +79,13 @@ public class StandingInstructionService(ScheduleDbContext dbContext, ICurrentCli
         if (recurrenceType != RecurrenceType.Periodic)
             throw new NoFinancingModuleException($"RecurrenceType '{recurrenceType}' requires a financing module, which does not exist yet. Only Periodic is supported today.");
 
-        var clientId = currentClient.ClientId;
+        // Every path that reaches here has already passed through [Authorize(Policy = ScheduleApiScopes.
+        // Write)] (ApiKeyAuthenticationHandler always sets ClaimTypes.Name), so ClientId is never actually
+        // null in real use - guarded explicitly here (rather than left as a silent nullable-to-non-
+        // nullable warning) because InitiatedBy is now a required column (QA nit, docs/DESIGN.md
+        // Appendix A: no reason for it to be nullable on a service with zero existing rows).
+        var clientId = currentClient.ClientId
+            ?? throw new InvalidOperationException("CreateAsync requires an authenticated caller.");
         var requestHash = HashRequest(request);
 
         // Checked BEFORE the Name-uniqueness pre-check below, not after: on a genuine replay (same key,
@@ -89,16 +95,10 @@ public class StandingInstructionService(ScheduleDbContext dbContext, ICurrentCli
         // Garbati.IdentityApi's CustomerService don't need this extra step because neither has a second,
         // independent uniqueness rule (like this entity's Name) that a legitimate replay would otherwise
         // always collide with.
-        var existingByKey = await dbContext.StandingInstructions.AsNoTracking().FirstOrDefaultAsync(
-            s => s.InitiatedBy == clientId && s.IdempotencyKey == request.IdempotencyKey, cancellationToken);
-        if (existingByKey is not null)
+        var replay = await FindReplayAsync(clientId, request.IdempotencyKey, requestHash, cancellationToken);
+        if (replay is not null)
         {
-            // Same key, different request: refuse rather than report the old instruction as this one's (409).
-            if (existingByKey.RequestHash != requestHash)
-                throw new DuplicateIdempotencyKeyException(
-                    $"Idempotency key '{request.IdempotencyKey}' was already used for a different request.");
-
-            return ToResponse(existingByKey);
+            return replay;
         }
 
         // Same retry-on-collision shape as LedgerApi's AccountService.CreateAccountAsync / Garbati.
@@ -112,6 +112,17 @@ public class StandingInstructionService(ScheduleDbContext dbContext, ICurrentCli
         {
             if (await dbContext.StandingInstructions.AnyAsync(s => s.Name == request.Name, cancellationToken))
             {
+                // QA-found race (real, reproduced 5/5 with Task.WhenAll, see
+                // Controllers/CreateStandingInstructionTests.Create_WithTwoTrulyConcurrentRequests_...):
+                // two requests with the IDENTICAL key AND identical Name can both reach here before either
+                // has inserted - this is NOT necessarily a genuine name conflict, it may be this caller's
+                // own concurrent retry having just landed. Re-check for a replay before concluding it is.
+                var concurrentReplay = await FindReplayAsync(clientId, request.IdempotencyKey, requestHash, cancellationToken);
+                if (concurrentReplay is not null)
+                {
+                    return concurrentReplay;
+                }
+
                 throw new DuplicateStandingInstructionNameException(request.Name);
             }
 
@@ -162,26 +173,26 @@ public class StandingInstructionService(ScheduleDbContext dbContext, ICurrentCli
 
                 if (pgEx.ConstraintName == "ix_standing_instructions_initiated_by_idempotency_key")
                 {
-                    var existing = await dbContext.StandingInstructions.AsNoTracking().FirstOrDefaultAsync(
-                        s => s.InitiatedBy == clientId && s.IdempotencyKey == request.IdempotencyKey, cancellationToken);
-
-                    if (existing is null)
-                        throw new InvalidOperationException("Error retrieving the result of the existing idempotency key.");
-
-                    // Same key, different request: refuse rather than report the old instruction as this
-                    // one's (409).
-                    if (existing.RequestHash != requestHash)
-                        throw new DuplicateIdempotencyKeyException(
-                            $"Idempotency key '{request.IdempotencyKey}' was already used for a different request.");
-
-                    return ToResponse(existing);
+                    var existingByKey = await FindReplayAsync(clientId, request.IdempotencyKey, requestHash, cancellationToken)
+                        ?? throw new InvalidOperationException("Error retrieving the result of the existing idempotency key.");
+                    return existingByKey;
                 }
 
                 if (pgEx.ConstraintName == "ix_standing_instructions_name")
                 {
                     // A concurrent request created the same Name between this attempt's own pre-check
-                    // above and its insert - the pre-check is an optimization for the common case, this
-                    // catch is what actually guarantees the constraint under a real race.
+                    // above and its insert. QA-found race (see the comment on the AnyAsync check above and
+                    // Controllers/CreateStandingInstructionTests.Create_WithTwoTrulyConcurrentRequests_...):
+                    // Postgres reports only ONE violated constraint even when an insert violates both
+                    // unique indexes at once (same key AND same Name, racing against this exact caller's
+                    // own concurrent retry) - this branch firing does NOT by itself mean the other
+                    // request's row has a different key, so check for a replay before concluding it does.
+                    var concurrentReplay = await FindReplayAsync(clientId, request.IdempotencyKey, requestHash, cancellationToken);
+                    if (concurrentReplay is not null)
+                    {
+                        return concurrentReplay;
+                    }
+
                     throw new DuplicateStandingInstructionNameException(request.Name);
                 }
 
@@ -191,6 +202,30 @@ public class StandingInstructionService(ScheduleDbContext dbContext, ICurrentCli
         }
 
         throw new InvalidOperationException($"Could not allocate a unique StandingInstructionId after {MaxIdGenerationAttempts} attempts.");
+    }
+
+    // Looks up an existing row for this (InitiatedBy, IdempotencyKey) pair. Null means no such row exists
+    // yet (not necessarily an error - the caller decides what that means in context: proceed with a
+    // normal create, or conclude a different conflict is genuine). A row DOES exist but its RequestHash
+    // differs -> throws DuplicateIdempotencyKeyException (409): same key, a materially different request,
+    // refused rather than silently replaying the wrong instruction.
+    private async Task<StandingInstructionResponse?> FindReplayAsync(
+        string clientId, string idempotencyKey, string requestHash, CancellationToken cancellationToken)
+    {
+        var existing = await dbContext.StandingInstructions.AsNoTracking().FirstOrDefaultAsync(
+            s => s.InitiatedBy == clientId && s.IdempotencyKey == idempotencyKey, cancellationToken);
+        if (existing is null)
+        {
+            return null;
+        }
+
+        if (existing.RequestHash != requestHash)
+        {
+            throw new DuplicateIdempotencyKeyException(
+                $"Idempotency key '{idempotencyKey}' was already used for a different request.");
+        }
+
+        return ToResponse(existing);
     }
 
     public async Task<StandingInstructionResponse?> GetAsync(string standingInstructionId, CancellationToken cancellationToken)

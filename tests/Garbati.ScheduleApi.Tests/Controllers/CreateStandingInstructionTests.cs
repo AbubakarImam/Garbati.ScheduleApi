@@ -1,6 +1,8 @@
 using Garbati.ScheduleApi.Authorization;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
 using Garbati.ScheduleApi.Tests.Fixtures;
 using Microsoft.EntityFrameworkCore;
 
@@ -60,6 +62,56 @@ public class CreateStandingInstructionTests(ApiFixture fixture)
             "/v1/standing-instructions", TestRequests.CreateRequest(idempotencyKey: key, amount: 999m), TestRequests.JsonOptions);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    // QA's own repro: two requests with the IDENTICAL key AND identical Name, fired truly concurrently
+    // (Task.WhenAll, not sequential awaits), race between the upfront idempotency check and the actual
+    // insert - both can pass every pre-check before either commits, since the OTHER request hasn't
+    // inserted yet at the moment each one checks. The loser's insert then violates BOTH unique
+    // constraints (Name AND the idempotency index) at once; Postgres reports only one constraint name
+    // back, which could be ix_standing_instructions_name - and naively treating that as "a genuine name
+    // conflict" (without first checking for the caller's own idempotent match) would tell this caller
+    // "duplicate name" instead of returning its own successful response, which is exactly the kind of
+    // error a real caller would reasonably react to by retrying with a NEW key - recreating the duplicate-
+    // recurring-payment risk this whole feature exists to close.
+    [Fact]
+    public async Task Create_WithTwoTrulyConcurrentRequests_SameKeyAndSameName_NeitherSeesADuplicateNameConflict()
+    {
+        using var client = Client();
+        var key = $"idem-race-{Guid.NewGuid():N}";
+        var body = JsonSerializer.Serialize(TestRequests.CreateRequest(idempotencyKey: key), TestRequests.JsonOptions);
+
+        Task<HttpResponseMessage> SendAsync() => client.PostAsync(
+            "/v1/standing-instructions", new StringContent(body, Encoding.UTF8, "application/json"));
+
+        var responses = await Task.WhenAll(SendAsync(), SendAsync());
+
+        try
+        {
+            foreach (var response in responses)
+            {
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            }
+
+            var ids = new List<string>();
+            foreach (var response in responses)
+            {
+                var parsed = await response.Content.ReadFromJsonAsync<JsonElement>();
+                ids.Add(parsed.GetProperty("standingInstructionId").GetString()!);
+            }
+            Assert.Equal(ids[0], ids[1]); // both requests resolved to the exact same instruction.
+        }
+        finally
+        {
+            foreach (var response in responses)
+            {
+                response.Dispose();
+            }
+        }
+
+        await using var dbContext = fixture.CreateContext();
+        var matchingRows = await dbContext.StandingInstructions.CountAsync(s => s.IdempotencyKey == key);
+        Assert.Equal(1, matchingRows); // exactly one row - the race did not create a second instruction.
     }
 
     [Fact]

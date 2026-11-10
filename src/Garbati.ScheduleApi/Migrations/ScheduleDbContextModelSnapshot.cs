@@ -64,10 +64,12 @@ namespace Garbati.ScheduleApi.Migrations
                         .HasColumnName("from_account_type");
 
                     b.Property<string>("IdempotencyKey")
+                        .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("idempotency_key");
 
                     b.Property<string>("InitiatedBy")
+                        .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("initiated_by");
 
@@ -113,6 +115,7 @@ namespace Garbati.ScheduleApi.Migrations
                         .HasColumnName("recurrence_type");
 
                     b.Property<string>("RequestHash")
+                        .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("request_hash");
 

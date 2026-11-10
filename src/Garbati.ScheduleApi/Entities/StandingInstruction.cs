@@ -53,9 +53,11 @@ public class StandingInstruction
     // shape - a client-supplied IdempotencyKey, scoped per calling client (InitiatedBy), plus a
     // RequestHash fingerprinting the fields that define what gets created, so a network retry with the
     // same key transparently replays the original resource instead of creating a duplicate or erroring.
-    // All three nullable only because EF Core requires every mapped property to have a settable default -
+    // Required (not nullable), unlike LedgerApi's Account/Garbati.IdentityApi's Customer, whose own
+    // equivalent columns stay nullable only for rows created before those columns existed (seed data) -
+    // ScheduleApi is a brand-new service with zero existing rows, so that reason never applies here and
     // every row created through StandingInstructionsController.Create always sets all three.
-    public string? IdempotencyKey { get; set; }
-    public string? InitiatedBy { get; set; }
-    public string? RequestHash { get; set; }
+    public string IdempotencyKey { get; set; } = null!;
+    public string InitiatedBy { get; set; } = null!;
+    public string RequestHash { get; set; } = null!;
 }
